@@ -4,7 +4,7 @@ MathVSE is a local-first mathematical solver and explainer built for determinist
 
 ## Current status
 
-Phase 1 is implemented and verified. Phase 2 adds validated image input and preprocessing for supported raster files. Phase 3 adds deterministic OCR interfaces and baseline spatial parsing for supported symbol layouts. Phase 4 adds the local Streamlit application that integrates these modules without fabricating OCR output.
+Phase 1 is implemented and verified. Phase 2 adds validated image input and preprocessing for supported raster files. Phase 3 adds deterministic OCR interfaces and baseline spatial parsing for supported symbol layouts. Phase 4 adds the local Streamlit application. Phase 5A adds an optional, reproducible pipeline for training and evaluating a mathematical-symbol CNN; it does not complete equation OCR from photographs.
 
 ## Supported image workflow
 
@@ -18,11 +18,61 @@ Phase 1 is implemented and verified. Phase 2 adds validated image input and prep
 ## OCR and spatial parsing status
 
 - typed recognition and symbol-candidate contracts
-- classifier interface for offline model status and missing-weight handling
+- classifier interface plus optional offline CNN inference with explicit missing-weight handling
 - baseline spatial parser for horizontal single-line expressions
 - explicit needs_review and unsupported_structure outcomes
 - no fabricated OCR confidence or accuracy claims
 - no real model weights or dataset downloads are required for default tests
+
+## Phase 5A: Symbol CNN
+
+Training is an explicit optional workflow and is never run during normal application startup. It uses PyTorch on CPU; the default installation and test suite do not require PyTorch, HASYv2, or trained weights.
+
+Install the optional training dependency and the CLI:
+
+```bash
+python -m pip install -e '.[training]'
+```
+
+Acquire HASYv2 separately from [hasydataset.com](https://www.hasydataset.com/) or its official project distribution. The upstream dataset is published under CC BY-SA 4.0; review the current dataset license, attribution requirements, and terms before use or redistribution. MathVSE does not fetch the dataset. Extract it locally so the selected dataset root has this layout:
+
+```text
+HASYv2/
+	hasy-data.csv
+	symbols.csv
+	hasy-data/
+		... PNG samples ...
+```
+
+For a locally downloaded archive, extract it without changing its contents; pass the directory containing both CSV files as `DATASET_ROOT`:
+
+```bash
+mkdir -p data/HASYv2
+unzip /path/to/HASYv2.zip -d data/HASYv2
+```
+
+The versioned mapping `mathvse-symbols-v1` supports digits `0`-`9`, `x`, `y`, `+`, `-`, `*`, `/`, `=`, `(`, and `)`. Integer class IDs are zero-based in that listed order. HASYv2 aliases `\\cdot` and `\\times` map to `*`; `\\div` maps to `/`. Other dataset labels, including advanced mathematical notation, are counted and reported as unsupported. Images must decode as 32x32 pixels; exact duplicate grayscale samples are removed before splitting. Splits are deterministic and grouped by duplicate image content.
+
+Validate the local files and inspect unsupported labels, class counts, duplicates, and corrupt samples:
+
+```bash
+mathvse-recognition validate-dataset /path/to/HASYv2
+```
+
+Train and save a versioned checkpoint (defaults: CPU, 20 epochs, batch size 32, seed 42):
+
+```bash
+mathvse-recognition train /path/to/HASYv2 --output models/math_symbols.pt --epochs 20 --batch-size 32 --learning-rate 0.001 --seed 42
+```
+
+The checkpoint stores weights, architecture and label-map versions, input/preprocessing contract, configuration, epoch-level training/validation metrics, and a distinct held-out test report. Reproduce the test split and report its metrics again with:
+
+```bash
+mathvse-recognition evaluate models/math_symbols.pt /path/to/HASYv2
+mathvse-recognition inspect models/math_symbols.pt
+```
+
+For Python inference, configure `TorchSymbolClassifier(model_path="models/math_symbols.pt")`. A missing checkpoint returns `model_unavailable`; incompatible metadata or output dimensions raise a configuration error. Training accuracy is not reported as test accuracy. Dataset files and model weights are local artifacts and should not be committed to Git. Symbol classification and baseline spatial parsing do not yet amount to reliable recognition of complete equations in photographs.
 
 ## Local application launch
 

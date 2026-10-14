@@ -116,6 +116,110 @@ class BaselineSymbolClassifier(SymbolClassifier):
         )
 
 
+class TorchSymbolClassifier(SymbolClassifier):
+    """Offline CNN inference using a compatible Phase 5A checkpoint."""
+
+    def __init__(
+        self,
+        *,
+        model_path: str | None = None,
+        label_map: dict[str, str] | None = None,
+        expected_input_shape: tuple[int, int, int] = (1, 32, 32),
+    ) -> None:
+        super().__init__(model_path=model_path, label_map=label_map, expected_input_shape=expected_input_shape)
+        self._model = None
+
+    def _load_checkpoint(self):
+        if self._model is not None:
+            return self._model
+        if not self.model_path or not self.is_available:
+            return None
+        try:
+            from mathvse.recognition.training import create_cnn, load_checkpoint
+
+            checkpoint = load_checkpoint(self.model_path)
+            if tuple(checkpoint["input_shape"]) != self.expected_input_shape:
+                raise InvalidModelConfigError("Checkpoint dimensions do not match classifier expected_input_shape.")
+            model = create_cnn(checkpoint["output_classes"])
+            model.load_state_dict(checkpoint["state_dict"], strict=True)
+            model.eval()
+        except InvalidModelConfigError:
+            raise
+        except (RuntimeError, ValueError, OSError, KeyError) as exc:
+            raise InvalidModelConfigError(f"Could not load a compatible CNN checkpoint: {exc}") from exc
+        self.label_map = dict(checkpoint["label_mapping"])
+        self._model = model
+        return model
+
+    def predict(
+        self,
+        patch: np.ndarray,
+        *,
+        bbox: tuple[int, int, int, int],
+        label_map: dict[str, str] | None = None,
+    ) -> SymbolPrediction:
+        if not self.model_path or not self.is_available:
+            return SymbolPrediction(
+                label="unknown",
+                confidence=0.0,
+                bbox=bbox,
+                status="model_unavailable",
+                alternatives=(SymbolCandidate("unknown", 0.0, bbox, status="unknown"),),
+                source="torch_cnn",
+            )
+
+        model = self._load_checkpoint()
+        try:
+            import torch
+            from PIL import Image
+
+            normalized = self.normalize_patch(patch, bbox=bbox)
+            if normalized.shape[2] == 1:
+                grayscale = normalized[:, :, 0]
+            else:
+                rgb = np.clip(normalized * 255.0, 0, 255).astype(np.uint8)
+                grayscale = np.asarray(Image.fromarray(rgb).convert("L"), dtype=np.float32) / 255.0
+            resized = Image.fromarray(np.clip(grayscale * 255.0, 0, 255).astype(np.uint8)).resize(
+                (32, 32), Image.Resampling.LANCZOS
+            )
+            tensor = torch.from_numpy(np.asarray(resized, dtype=np.float32).copy() / 255.0)[None, None, :, :]
+            with torch.inference_mode():
+                logits = model(tensor)
+                from mathvse.recognition.training import validate_output_shape
+
+                validate_output_shape(tuple(logits.shape), batch_size=1, class_count=len(self.label_map))
+                probabilities = torch.softmax(logits[0], dim=0)
+                values, indices = torch.topk(probabilities, k=min(3, len(self.label_map)))
+        except InvalidImageDataError:
+            raise
+        except Exception as exc:
+            if isinstance(exc, InvalidModelConfigError):
+                raise
+            raise InvalidModelConfigError(f"CNN inference failed: {exc}") from exc
+
+        active_map = label_map or self.label_map
+        best_id = str(int(indices[0].item()))
+        best_label = active_map.get(best_id)
+        if best_label is None:
+            raise InvalidModelConfigError(f"Classifier label mapping has no entry for output class {best_id}.")
+        alternatives = tuple(
+            SymbolCandidate(
+                label=active_map.get(str(int(class_id.item())), "unknown"),
+                confidence=float(score.item()),
+                bbox=bbox,
+            )
+            for score, class_id in zip(values, indices)
+        )
+        return SymbolPrediction(
+            label=best_label,
+            confidence=float(values[0].item()),
+            bbox=bbox,
+            status="recognized",
+            alternatives=alternatives,
+            source="torch_cnn",
+        )
+
+
 class RecognitionAdapter:
     def __init__(self, classifier: SymbolClassifier) -> None:
         self.classifier = classifier

@@ -1,3 +1,3 @@
-from mathvse.recognition.classifier import BaselineSymbolClassifier, SymbolClassifier
+from mathvse.recognition.classifier import BaselineSymbolClassifier, SymbolClassifier, TorchSymbolClassifier
 
-__all__ = ["BaselineSymbolClassifier", "SymbolClassifier"]
+__all__ = ["BaselineSymbolClassifier", "SymbolClassifier", "TorchSymbolClassifier"]
