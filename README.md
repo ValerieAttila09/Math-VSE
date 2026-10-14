@@ -4,7 +4,7 @@ MathVSE is a local-first mathematical solver and explainer built for determinist
 
 ## Current status
 
-Phase 1 is implemented and verified. Phase 2 adds validated image input and preprocessing for supported raster files.
+Phase 1 is implemented and verified. Phase 2 adds validated image input and preprocessing for supported raster files. Phase 3 adds deterministic OCR interfaces and baseline spatial parsing for supported symbol layouts.
 
 ## Supported image workflow
 
@@ -14,6 +14,15 @@ Phase 1 is implemented and verified. Phase 2 adds validated image input and prep
 - grayscale conversion and thresholding variants
 - conservative denoising and normalization
 - preliminary contour and bounding-box detection for debugging and preview
+
+## OCR and spatial parsing status
+
+- typed recognition and symbol-candidate contracts
+- classifier interface for offline model status and missing-weight handling
+- baseline spatial parser for horizontal single-line expressions
+- explicit needs_review and unsupported_structure outcomes
+- no fabricated OCR confidence or accuracy claims
+- no real model weights or dataset downloads are required for default tests
 
 ## Installation
 
