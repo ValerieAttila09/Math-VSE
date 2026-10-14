@@ -1,0 +1,20 @@
+version: "3.8"
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # Set to "1" to include CPU-only PyTorch in the image
+      args:
+        INSTALL_TORCH: "0"
+    image: mathvse:dev
+    volumes:
+      - ./:/workspace:rw
+    working_dir: /workspace
+    environment:
+      - PYTHONUNBUFFERED=1
+    ports:
+      # Streamlit default port mapping (host:container)
+      - "8501:8501"
+    tty: true
+    stdin_open: true
