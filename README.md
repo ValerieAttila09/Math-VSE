@@ -4,7 +4,7 @@ MathVSE is a local-first mathematical solver and explainer built for determinist
 
 ## Current status
 
-Phase 1 is implemented and verified. Phase 2 adds validated image input and preprocessing for supported raster files. Phase 3 adds deterministic OCR interfaces and baseline spatial parsing for supported symbol layouts.
+Phase 1 is implemented and verified. Phase 2 adds validated image input and preprocessing for supported raster files. Phase 3 adds deterministic OCR interfaces and baseline spatial parsing for supported symbol layouts. Phase 4 adds the local Streamlit application that integrates these modules without fabricating OCR output.
 
 ## Supported image workflow
 
@@ -23,6 +23,19 @@ Phase 1 is implemented and verified. Phase 2 adds validated image input and prep
 - explicit needs_review and unsupported_structure outcomes
 - no fabricated OCR confidence or accuracy claims
 - no real model weights or dataset downloads are required for default tests
+
+## Local application launch
+
+```bash
+cd /workspaces/Math-VSE
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e '.[dev]'
+streamlit run app.py
+```
+
+The UI is intentionally local-only and requires no remote API or LLM. If no OCR model is configured, the interface shows model_unavailable instead of inventing a prediction.
 
 ## Installation
 

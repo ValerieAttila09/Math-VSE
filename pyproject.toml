@@ -8,6 +8,7 @@ dependencies = [
   "numpy>=1.26",
   "opencv-python-headless>=4.10",
   "pillow>=10.0",
+  "streamlit>=1.36",
   "sympy>=1.12",
 ]
 
