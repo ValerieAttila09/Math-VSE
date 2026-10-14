@@ -46,7 +46,8 @@ def preprocess_image(
     gray = _ensure_2d_gray(image)
     resized = _resize_with_limit(gray, resize_limit)
     denoised = cv2.GaussianBlur(resized, (3, 3), 0) if denoise else resized
-    otsu = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+    otsu_base = cv2.threshold(denoised, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+    otsu = otsu_base.copy()
     adaptive = cv2.adaptiveThreshold(
         denoised,
         255,
@@ -78,18 +79,26 @@ def preprocess_image(
         "normalized": normalized if normalize else denoised,
     }
 
-    contour_map, _ = cv2.findContours(otsu, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    border_pixels = np.concatenate((resized[0, :], resized[-1, :], resized[:, 0], resized[:, -1]))
+    foreground_mask = otsu_base if float(np.median(border_pixels)) < 127 else cv2.bitwise_not(otsu_base)
+    component_count, _, component_stats, _ = cv2.connectedComponentsWithStats(
+        foreground_mask,
+        connectivity=8,
+    )
+    components: list[tuple[int, int, int, int, int]] = []
+    for component_index in range(1, component_count):
+        x, y, width, height, area = (int(value) for value in component_stats[component_index])
+        if area >= 30:
+            components.append((x, y, width, height, area))
+    components.sort(key=lambda component: (component[1], component[0], component[3], component[2]))
+
     candidate_regions: list[CandidateRegion] = []
-    for idx, contour in enumerate(contour_map):
-        area = cv2.contourArea(contour)
-        if area < 30:
-            continue
-        x, y, w, h = cv2.boundingRect(contour)
+    for idx, (x, y, width, height, area) in enumerate(components):
         candidate_regions.append(
             CandidateRegion(
-                region_id=f"candidate_{idx + 1}",
-                bbox=(int(x), int(y), int(w), int(h)),
-                area=int(area),
+                region_id=f"candidate_{idx + 1:04d}",
+                bbox=(x, y, width, height),
+                area=area,
                 label="preliminary_candidate",
                 status="preliminary",
             )

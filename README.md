@@ -4,7 +4,7 @@ MathVSE is a local-first mathematical solver and explainer built for determinist
 
 ## Current status
 
-Phase 1 is implemented and verified. Phase 2 adds validated image input and preprocessing for supported raster files. Phase 3 adds deterministic OCR interfaces and baseline spatial parsing for supported symbol layouts. Phase 4 adds the local Streamlit application. Phase 5A adds an optional, reproducible pipeline for training and evaluating a mathematical-symbol CNN; it does not complete equation OCR from photographs.
+Phase 1 is implemented and verified. Phase 2 adds validated image input and preprocessing for supported raster files. Phase 3 adds deterministic OCR interfaces and baseline spatial parsing. Phase 4 adds the local Streamlit application. Phase 5A adds optional symbol-CNN training, and Phase 5B connects image-derived crops to the classifier and spatial parser. Real equation recognition still depends on a trained local checkpoint and user review; complete equation OCR from photographs is not claimed.
 
 ## Supported image workflow
 
@@ -73,6 +73,14 @@ mathvse-recognition inspect models/math_symbols.pt
 ```
 
 For Python inference, configure `TorchSymbolClassifier(model_path="models/math_symbols.pt")`. A missing checkpoint returns `model_unavailable`; incompatible metadata or output dimensions raise a configuration error. Training accuracy is not reported as test accuracy. Dataset files and model weights are local artifacts and should not be committed to Git. Symbol classification and baseline spatial parsing do not yet amount to reliable recognition of complete equations in photographs.
+
+Run local image-to-expression inference from the CLI:
+
+```bash
+mathvse-recognition infer-image /path/to/equation.png --checkpoint models/math_symbols.pt --confidence-threshold 0.55 --ambiguity-margin 0.08
+```
+
+Inference reuses the checkpoint's grayscale, as-stored polarity, 32x32, and zero-to-one input contract. Class candidates are ranked by softmax probability; these scores are not calibrated accuracy estimates. Foreground connected components are preliminary crops, not guaranteed characters. Components touching an image edge, unusually elongated components, low-confidence symbols, and close top classes require review. The UI shows crops and alternatives, keeps machine output separate from the corrected expression, and requires an explicit review confirmation before solving. Without weights or PyTorch, image recognition reports `model_unavailable`; manual text solving remains available. Fractions, superscripts, radicals, and reliable full-photo equation OCR remain unsupported.
 
 ## Local application launch
 

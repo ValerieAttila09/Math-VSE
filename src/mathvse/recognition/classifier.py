@@ -134,6 +134,8 @@ class TorchSymbolClassifier(SymbolClassifier):
             return self._model
         if not self.model_path or not self.is_available:
             return None
+        if Path(self.model_path).suffix.lower() not in {".pt", ".pth"}:
+            raise InvalidModelConfigError("TorchSymbolClassifier requires a .pt or .pth Phase 5A checkpoint.")
         try:
             from mathvse.recognition.training import create_cnn, load_checkpoint
 
@@ -145,7 +147,13 @@ class TorchSymbolClassifier(SymbolClassifier):
             model.eval()
         except InvalidModelConfigError:
             raise
-        except (RuntimeError, ValueError, OSError, KeyError) as exc:
+        except ModelUnavailableError:
+            raise
+        except RuntimeError as exc:
+            if "PyTorch is optional" in str(exc):
+                raise ModelUnavailableError("PyTorch is not installed for local CNN inference.") from exc
+            raise InvalidModelConfigError(f"Could not load a compatible CNN checkpoint: {exc}") from exc
+        except Exception as exc:
             raise InvalidModelConfigError(f"Could not load a compatible CNN checkpoint: {exc}") from exc
         self.label_map = dict(checkpoint["label_mapping"])
         self._model = model
@@ -171,22 +179,11 @@ class TorchSymbolClassifier(SymbolClassifier):
         model = self._load_checkpoint()
         try:
             import torch
-            from PIL import Image
+            from mathvse.recognition.training import prepare_classifier_input, validate_output_shape
 
-            normalized = self.normalize_patch(patch, bbox=bbox)
-            if normalized.shape[2] == 1:
-                grayscale = normalized[:, :, 0]
-            else:
-                rgb = np.clip(normalized * 255.0, 0, 255).astype(np.uint8)
-                grayscale = np.asarray(Image.fromarray(rgb).convert("L"), dtype=np.float32) / 255.0
-            resized = Image.fromarray(np.clip(grayscale * 255.0, 0, 255).astype(np.uint8)).resize(
-                (32, 32), Image.Resampling.LANCZOS
-            )
-            tensor = torch.from_numpy(np.asarray(resized, dtype=np.float32).copy() / 255.0)[None, None, :, :]
+            tensor = torch.from_numpy(prepare_classifier_input(patch).copy()).unsqueeze(0)
             with torch.inference_mode():
                 logits = model(tensor)
-                from mathvse.recognition.training import validate_output_shape
-
                 validate_output_shape(tuple(logits.shape), batch_size=1, class_count=len(self.label_map))
                 probabilities = torch.softmax(logits[0], dim=0)
                 values, indices = torch.topk(probabilities, k=min(3, len(self.label_map)))

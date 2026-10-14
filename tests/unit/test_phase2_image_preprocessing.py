@@ -89,6 +89,20 @@ def test_preprocessing_variants_for_synthetic_equation():
     assert result.variants["grayscale"].shape[0] > 0
     assert result.candidate_regions
     assert result.bounding_boxes
+    assert result.bounding_boxes == [(60, 50, 120, 90)]
+
+
+def test_preprocessing_returns_stable_foreground_components_on_white_background():
+    image = np.full((80, 140, 3), 255, dtype=np.uint8)
+    image[20:48, 15:39] = 0
+    image[20:48, 75:99] = 0
+
+    first = preprocess_image(image)
+    second = preprocess_image(image)
+
+    assert first.bounding_boxes == [(15, 20, 24, 28), (75, 20, 24, 28)]
+    assert [region.region_id for region in first.candidate_regions] == ["candidate_0001", "candidate_0002"]
+    assert first.bounding_boxes == second.bounding_boxes
 
 
 def test_preprocessing_handles_empty_input():

@@ -297,6 +297,26 @@ def validate_output_shape(shape: tuple[int, ...], *, batch_size: int, class_coun
         )
 
 
+def prepare_classifier_input(image: np.ndarray) -> np.ndarray:
+    """Return one as-stored grayscale sample in the CNN's (1, 32, 32) [0, 1] contract."""
+    if image is None or np.asarray(image).size == 0:
+        raise ValueError("Classifier image patch is empty")
+    pixels = np.asarray(image)
+    if pixels.ndim == 2:
+        gray = pixels
+    elif pixels.ndim == 3 and pixels.shape[2] in {1, 3, 4}:
+        if pixels.dtype != np.uint8:
+            pixels = np.clip(pixels, 0, 255).astype(np.uint8)
+        gray = np.asarray(Image.fromarray(pixels).convert("L"))
+    else:
+        raise ValueError(f"Unsupported classifier image shape: {pixels.shape}")
+    if gray.dtype != np.uint8:
+        gray = np.clip(gray, 0, 255).astype(np.uint8)
+    if gray.shape != IMAGE_SIZE:
+        gray = np.asarray(Image.fromarray(gray).resize(IMAGE_SIZE, Image.Resampling.LANCZOS))
+    return (gray.astype(np.float32) / 255.0)[None, :, :]
+
+
 def _torch_modules():
     try:
         import torch
@@ -344,8 +364,8 @@ class _ImageDataset:
     def __getitem__(self, index: int):
         sample = self.samples[index]
         with Image.open(sample.path) as image:
-            pixels = np.asarray(image.convert("L"), dtype=np.float32) / 255.0
-        return pixels[None, :, :], sample.label_id
+            pixels = np.asarray(image.convert("L"))
+        return prepare_classifier_input(pixels), sample.label_id
 
 
 def _evaluate(model, samples: list[DatasetSample], *, batch_size: int) -> dict[str, Any]:
@@ -519,6 +539,11 @@ def _build_cli() -> argparse.ArgumentParser:
     evaluate.add_argument("dataset_root")
     inspect = commands.add_parser("inspect", help="inspect a compatible checkpoint")
     inspect.add_argument("checkpoint")
+    infer = commands.add_parser("infer-image", help="run local image-to-expression inference")
+    infer.add_argument("image_path")
+    infer.add_argument("--checkpoint")
+    infer.add_argument("--confidence-threshold", type=float, default=0.55)
+    infer.add_argument("--ambiguity-margin", type=float, default=0.08)
     return parser
 
 
@@ -537,8 +562,17 @@ def main(argv: list[str] | None = None) -> int:
         ))
     elif args.command == "evaluate":
         result = evaluate_checkpoint(args.checkpoint, args.dataset_root)
-    else:
+    elif args.command == "inspect":
         result = inspect_checkpoint(args.checkpoint)
+    else:
+        from mathvse.pipeline.image_inference import infer_image_file
+
+        result = infer_image_file(
+            args.image_path,
+            model_path=args.checkpoint,
+            confidence_threshold=args.confidence_threshold,
+            ambiguity_margin=args.ambiguity_margin,
+        ).as_dict()
     print(json.dumps(result, ensure_ascii=True, indent=2))
     return 0
 

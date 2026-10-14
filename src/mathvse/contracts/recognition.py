@@ -20,6 +20,7 @@ class SymbolPrediction:
     status: str = "recognized"
     alternatives: tuple[SymbolCandidate, ...] = ()
     source: str = "synthetic"
+    component_id: str | None = None
 
 
 @dataclass

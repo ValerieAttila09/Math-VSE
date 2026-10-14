@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -7,12 +8,10 @@ import cv2
 import numpy as np
 import streamlit as st
 
-from mathvse.contracts.recognition import RecognitionResult, SymbolPrediction
+from mathvse.pipeline.image_inference import infer_image
 from mathvse.pipeline.orchestrator import solve_text_expression
-from mathvse.recognition.classifier import BaselineSymbolClassifier
-from mathvse.spatial.parser import parse_symbols
+from mathvse.recognition.classifier import TorchSymbolClassifier
 from mathvse.vision.input import load_image_file
-from mathvse.vision.preprocessing import preprocess_image
 
 
 @st.cache_data(show_spinner=False)
@@ -20,37 +19,29 @@ def evaluate_expression(expression: str):
     return solve_text_expression(expression)
 
 
-@st.cache_data(show_spinner=False)
-def evaluate_uploaded_image(file_path: str | Path, *, model_path: str | None = None):
+def evaluate_uploaded_image(
+    file_path: str | Path,
+    *,
+    model_path: str | None = None,
+    confidence_threshold: float = 0.55,
+    ambiguity_margin: float = 0.08,
+):
     path = Path(file_path)
     loaded = load_image_file(path)
-    processed = preprocess_image(loaded.image, strategy_name="balanced")
-
-    if model_path:
-        classifier = BaselineSymbolClassifier(model_path=model_path)
-        status = "ready" if classifier.is_available else "model_unavailable"
-        recognition = RecognitionResult(
-            status="model_unavailable" if not classifier.is_available else "success",
-            symbols=[],
-            normalized_text="",
-            warnings=["No trained OCR weights were loaded for this environment."] if not classifier.is_available else [],
-            model_path=model_path,
-            model_status=status,
-        )
-    else:
-        recognition = RecognitionResult(
-            status="model_unavailable",
-            symbols=[],
-            normalized_text="",
-            warnings=["No OCR model path configured; image recognition is unavailable."],
-            model_path=None,
-            model_status="model_unavailable",
-        )
+    inference = infer_image(
+        loaded.image,
+        classifier=TorchSymbolClassifier(model_path=model_path),
+        model_path=model_path,
+        confidence_threshold=confidence_threshold,
+        ambiguity_margin=ambiguity_margin,
+        loaded_image=loaded,
+    )
 
     return {
         "loaded": loaded,
-        "processed": processed,
-        "recognition": recognition,
+        "processed": inference.preprocessing,
+        "recognition": inference.recognition,
+        "inference": inference,
     }
 
 
@@ -105,9 +96,19 @@ def _render_image_solver():
         return
 
     try:
-        temp_path = Path("/tmp") / uploaded.name
-        temp_path.write_bytes(uploaded.getvalue())
-        result = evaluate_uploaded_image(temp_path, model_path=st.session_state.get("ocr_model_path"))
+        upload_bytes = uploaded.getvalue()
+        upload_key = hashlib.sha256(upload_bytes).hexdigest()[:16]
+        if st.session_state.get("last_upload_key") != upload_key:
+            st.session_state["image_result"] = None
+            st.session_state["last_upload_key"] = upload_key
+        temp_path = Path("/tmp") / f"mathvse_{upload_key}_{Path(uploaded.name).name}"
+        temp_path.write_bytes(upload_bytes)
+        result = evaluate_uploaded_image(
+            temp_path,
+            model_path=st.session_state.get("ocr_model_path") or None,
+            confidence_threshold=st.session_state.get("ocr_confidence_threshold", 0.55),
+            ambiguity_margin=st.session_state.get("ocr_ambiguity_margin", 0.08),
+        )
     except Exception as exc:  # pragma: no cover - UI boundary handling
         st.error(f"Image could not be processed: {exc}")
         return
@@ -115,29 +116,59 @@ def _render_image_solver():
     loaded = result["loaded"]
     processed = result["processed"]
     recognition = result["recognition"]
+    inference = result["inference"]
 
     st.image(np.asarray(loaded.image[:, :, ::-1]), caption="Original image", use_container_width=True)
+    st.caption(f"Image metadata: {loaded.metadata.width}x{loaded.metadata.height}, {loaded.metadata.file_format}, {loaded.metadata.file_size_bytes} bytes")
+
+    if processed is None:
+        st.error("Image preprocessing failed; no crops or expression were generated.")
+        for warning in inference.warnings:
+            st.caption(warning)
+        return
 
     option = st.selectbox("Preprocessing variant", list(processed.variants.keys()))
     preview = _prepare_variant_image(option, processed)
     st.image(preview, caption=f"Variant: {option}", use_container_width=True)
 
-    if processed.bounding_boxes:
+    if processed and processed.bounding_boxes:
         preview_with_boxes = _draw_boxes(preview, processed.bounding_boxes)
-        st.image(preview_with_boxes, caption="Preliminary candidate boxes", use_container_width=True)
+        st.image(preview_with_boxes, caption="Foreground component candidates", use_container_width=True)
 
-    st.caption(f"Image metadata: {loaded.metadata.width}x{loaded.metadata.height}, {loaded.metadata.file_format}, {loaded.metadata.file_size_bytes} bytes")
+    if inference.crops:
+        st.write("### Component crops and predictions")
+        for crop in inference.crops:
+            prediction = next((item for item in inference.predictions if item.component_id == crop.component_id), None)
+            if crop.image is not None:
+                st.image(crop.image, caption=f"{crop.component_id} · bbox {crop.bbox}", width=120)
+            if prediction is None:
+                st.caption(f"{crop.component_id}: {crop.status}" + (f" · {crop.warning}" if crop.warning else ""))
+                continue
+            ranked = ", ".join(
+                f"{candidate.label}: {candidate.confidence:.3f}"
+                for candidate in prediction.alternatives
+            )
+            st.caption(
+                f"{crop.component_id}: {prediction.label} ({prediction.confidence:.3f}) · "
+                f"{prediction.status} · candidates: {ranked or 'none'}"
+            )
 
-    if recognition.model_status == "model_unavailable":
-        st.warning("OCR model unavailable. The system cannot fabricate recognized symbols. Use manual expression input or provide a valid model path.")
-        st.session_state["recognized_expression"] = ""
-    else:
-        st.session_state["recognized_expression"] = recognition.normalized_text or ""
+    if inference.status == "model_unavailable":
+        st.warning("OCR model or PyTorch is unavailable. No symbol predictions were generated; manual expression solving remains available.")
+    elif inference.status != "success":
+        st.warning(f"Image recognition status: {inference.status}. Review the component crops or enter a corrected expression.")
+    for warning in inference.warnings:
+        st.caption(warning)
 
-    st.text_input("Recognized expression (machine)", value=st.session_state.get("recognized_expression", ""), key="recognized_expression")
-    edited_expression = st.text_input("Confirmed / corrected expression", value=st.session_state.get("recognized_expression", "") or "")
-    if st.button("Solve confirmed expression"):
-        st.session_state["image_result"] = evaluate_expression(edited_expression)
+    st.text_input("Machine expression (unconfirmed)", value=inference.normalized_expression, disabled=True)
+    confirmation_key = f"confirmed_expression_{upload_key}"
+    reviewed_key = f"ocr_reviewed_{upload_key}"
+    if confirmation_key not in st.session_state:
+        st.session_state[confirmation_key] = inference.normalized_expression
+    corrected_expression = st.text_input("Confirmed / corrected expression", key=confirmation_key)
+    reviewed = st.checkbox("I reviewed and confirm this expression", key=reviewed_key)
+    if st.button("Solve confirmed expression", disabled=not reviewed or not corrected_expression.strip()):
+        st.session_state["image_result"] = evaluate_expression(corrected_expression)
 
     image_result = st.session_state.get("image_result")
     if image_result is not None:
@@ -167,9 +198,23 @@ def main() -> None:
         st.session_state["ocr_model_path"] = st.text_input(
             "OCR model path",
             value=st.session_state.get("ocr_model_path", ""),
-            help="Optional local model path for a future offline OCR model. Missing weights are reported explicitly.",
+            help="Optional path to a compatible local Phase 5A CNN checkpoint.",
         )
-        st.caption("The default OCR path is intentionally absent; no fake predictions are produced.")
+        st.session_state["ocr_confidence_threshold"] = st.slider(
+            "Minimum symbol confidence",
+            min_value=0.0,
+            max_value=1.0,
+            value=float(st.session_state.get("ocr_confidence_threshold", 0.55)),
+            step=0.05,
+        )
+        st.session_state["ocr_ambiguity_margin"] = st.slider(
+            "Minimum top-class separation",
+            min_value=0.0,
+            max_value=0.5,
+            value=float(st.session_state.get("ocr_ambiguity_margin", 0.08)),
+            step=0.01,
+        )
+        st.caption("Image predictions require manual review before solving.")
 
     tab_image, tab_manual = st.tabs(["Image input", "Manual expression"])
     with tab_image:
